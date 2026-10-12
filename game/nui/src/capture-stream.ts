@@ -1,11 +1,8 @@
 import { CaptureStreamActions } from './types';
 import { captureSessionCoordinator } from './capture-session-coordinator';
 import { GameMediaSource } from './game-media-source';
+import { CHUNK_SIZE, createUploadWritable } from './stream-writable';
 import { Output, WebMOutputFormat, StreamTarget, MediaStreamVideoTrackSource, QUALITY_MEDIUM } from 'mediabunny';
-import type { StreamTargetChunk } from 'mediabunny';
-
-// 1mb fivem constraint
-const CHUNK_SIZE = 800 * 1024;
 
 type CaptureStreamHttpRequest = {
   action: CaptureStreamActions;
@@ -69,17 +66,6 @@ export class CaptureStream {
     });
   }
 
-  private async assertCallbackResponse(response: Response, context: string): Promise<void> {
-    if (!response.ok) {
-      throw new Error(`${context} failed: ${response.status}`);
-    }
-
-    const result = await response.json().catch(() => true);
-    if (result && typeof result === 'object' && 'ok' in result && !result.ok) {
-      throw new Error(`${context} failed: ${result.error ?? 'Unknown error'}`);
-    }
-  }
-
   async stream(request: CaptureStreamRequest) {
     if (this.#output || this.#gameMediaSource.active || this.#mediaStream) {
       console.error('[screencapture] video capture is already active');
@@ -92,20 +78,14 @@ export class CaptureStream {
       return;
     }
 
-    const { uploadToken, serverEndpoint, callbackUrl, finalizeCallbackUrl } = request;
-
     this.#captureId = request.captureId ?? null;
     this.#leaseId = leaseId;
     this.#stopping = false;
 
     try {
-      const writable = callbackUrl
-        ? this.createNuiWritableStream(uploadToken, callbackUrl, finalizeCallbackUrl!)
-        : this.createHttpWritableStream(uploadToken, serverEndpoint!);
-
       this.#output = new Output({
         format: new WebMOutputFormat({ appendOnly: true }),
-        target: new StreamTarget(writable, { chunked: true, chunkSize: CHUNK_SIZE }),
+        target: new StreamTarget(createUploadWritable(request), { chunked: true, chunkSize: CHUNK_SIZE }),
       });
 
       this.#mediaStream = await this.#gameMediaSource.start({
@@ -138,70 +118,6 @@ export class CaptureStream {
       await this.stop();
       throw error;
     }
-  }
-
-  private createHttpWritableStream(uploadToken: string, serverEndpoint: string): WritableStream<StreamTargetChunk> {
-    return new WritableStream<StreamTargetChunk>({
-      async write(chunk) {
-        const response = await fetch(`${serverEndpoint}/stream-chunk/${uploadToken}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/octet-stream' },
-          body: chunk.data,
-        });
-
-        if (!response.ok) {
-          throw new Error(`Chunk upload failed: ${response.status}`);
-        }
-      },
-
-      async close() {
-        await fetch(`${serverEndpoint}/stream-finalize/${uploadToken}`, {
-          method: 'POST',
-        });
-      },
-    });
-  }
-
-  private createNuiWritableStream(
-    uploadToken: string,
-    callbackUrl: string,
-    finalizeCallbackUrl: string,
-  ): WritableStream<StreamTargetChunk> {
-    const assertCallbackResponse = this.assertCallbackResponse.bind(this);
-
-    return new WritableStream<StreamTargetChunk>({
-      async write(chunk) {
-        const bytes = chunk.data instanceof ArrayBuffer
-          ? new Uint8Array(chunk.data)
-          : new Uint8Array(chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength);
-
-        const BATCH = 8192;
-        const parts: string[] = [];
-        for (let i = 0; i < bytes.length; i += BATCH) {
-          const end = Math.min(i + BATCH, bytes.length);
-          parts.push(String.fromCharCode(...bytes.subarray(i, end)));
-        }
-        const base64Data = btoa(parts.join(''));
-
-        const response = await fetch(callbackUrl, {
-          method: 'POST',
-          body: JSON.stringify({ token: uploadToken, data: base64Data }),
-          headers: { 'Content-Type': 'application/json' },
-        });
-
-        await assertCallbackResponse(response, 'NUI chunk callback');
-      },
-
-      async close() {
-        const response = await fetch(finalizeCallbackUrl, {
-          method: 'POST',
-          body: JSON.stringify({ token: uploadToken }),
-          headers: { 'Content-Type': 'application/json' },
-        });
-
-        await assertCallbackResponse(response, 'NUI finalize callback');
-      },
-    });
   }
 
   async stop() {

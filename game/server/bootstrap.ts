@@ -10,6 +10,7 @@ export const liveStreamStore = new LiveStreamStore();
 import { registerImageHandlers } from './image';
 import { registerStreamHandlers } from './stream';
 import { registerLiveStreamHandlers } from './live';
+import { registerReplayHandlers } from './replay';
 
 async function boot() {
   void checkForUpdates();
@@ -17,6 +18,7 @@ async function boot() {
   registerImageHandlers();
   registerStreamHandlers();
   registerLiveStreamHandlers();
+  registerReplayHandlers();
 }
 
 boot();

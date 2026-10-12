@@ -3,6 +3,12 @@ export enum CaptureStreamActions {
     Stop = "capture-stream-stop"
 }
 
+export enum ReplayActions {
+    Start = "replay-buffer-start",
+    Stop = "replay-buffer-stop",
+    Save = "replay-buffer-save"
+}
+
 export enum LiveStreamActions {
     Start = "live-stream-start",
     Stop = "live-stream-stop"

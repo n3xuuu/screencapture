@@ -123,7 +123,21 @@ export type RequestUploadToken = {
   filename: string;
 };
 
-export type LiveStreamState = 'provisioning' | 'connecting' | 'live' | 'reconnecting' | 'failed' | 'stopped';
+export type ReplayBufferOptions = {
+  bufferSeconds?: number;
+  maxWidth?: number;
+  maxHeight?: number;
+  frameRate?: number;
+  indicator?: boolean;
+};
+
+// Local file by default; passing `url` uploads the clip instead, like startVideoCaptureUpload.
+export type ReplaySaveOptions = StreamRemoteConfig & {
+  seconds?: number;
+  url?: string;
+};
+
+export type LiveStreamState ='provisioning' | 'connecting' | 'live' | 'reconnecting' | 'failed' | 'stopped';
 
 export type LiveStreamOptions = {
   maxWidth?: number;

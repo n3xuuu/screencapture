@@ -101,7 +101,12 @@ function createProgram(gl: WebGLRenderingContext) {
 	return { program, vloc, tloc };
 }
 
-export function createGameView(canvas: HTMLCanvasElement) {
+// `maxFps` skips redraws that would exceed it. Each redraw ends in a blocking gl.finish(), so capping it matters for
+// long-running captures. The margin absorbs requestAnimationFrame jitter, which would otherwise round 20fps down to 15.
+export function createGameView(canvas: HTMLCanvasElement, options: { maxFps?: number } = {}) {
+	const minFrameTime = options.maxFps ? 1000 / options.maxFps - 4 : 0;
+	let lastDraw = 0;
+
 	const gl = canvas.getContext('webgl', {
 		antialias: false,
 		depth: false,
@@ -165,10 +170,13 @@ export function createGameView(canvas: HTMLCanvasElement) {
 		},
 	};
 
-	render = () => {
+	render = (now = performance.now()) => {
 		if (gameView.disposed) return;
-		gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-		gl.finish();
+		if (now - lastDraw >= minFrameTime) {
+			lastDraw = now;
+			gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+			gl.finish();
+		}
 
         // @ts-ignore
 		gameView.animationFrame = requestAnimationFrame(render);

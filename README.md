@@ -246,6 +246,59 @@ exports.screencapture:INTERNAL_stopServerCaptureStream(source)
 
 ---
 
+## Instant replay
+
+> **Experimental.** Built on the same WebM (VP9) capture as video, so the same caveats apply. It runs a continuous encode on every player who has a buffer, so enable it for a few players first and watch client performance.
+
+Keeps a rolling buffer of the player's game view in their NUI memory. Nothing leaves the client until the server calls `saveReplay`, which cuts the most recent seconds out of the buffer and delivers them as a WebM file. Use it to review what a player did just before an event, for example a kill.
+
+A player with a running buffer cannot start a video capture or live stream until you call `stopReplayBuffer`. Only the game view is recorded, never the desktop or audio. The player sees a `REPLAY BUFFER / VIDEO ONLY` indicator unless you pass `indicator = false`; if you hide it, tell your players.
+
+### `startReplayBuffer` — server-side export
+
+Starts the buffer for a player and returns `true` if the request was sent. Call it once the player is in game. Calling it again for a running buffer does nothing; call `stopReplayBuffer` first to change options.
+
+| Field           | Type      | Default | Max    | Description                                   |
+| --------------- | --------- | ------- | ------ | --------------------------------------------- |
+| `bufferSeconds` | `number`  | `30`    | `120`  | How much footage to keep                      |
+| `maxWidth`      | `number`  | `1280`  | `1920` | Maximum capture width in pixels               |
+| `maxHeight`     | `number`  | `720`   | `1080` | Maximum capture height in pixels              |
+| `frameRate`     | `number`  | `20`    | `30`   | Frames per second                             |
+| `indicator`     | `boolean` | `true`  |        | Show the replay buffer indicator to the player |
+
+### `saveReplay` — server-side export
+
+Saves the most recent footage from a player's buffer and returns a `captureId`. The callback receives the same structured result as `startVideoCapture` when the file is complete, or an error result if it could not be saved (no buffer, a save already in progress, or nothing received after two minutes).
+
+| Field       | Type     | Default       | Description                                                |
+| ----------- | -------- | ------------- | ---------------------------------------------------------- |
+| `seconds`   | `number` | `10`          | How much of the most recent footage to save               |
+| `url`       | `string` |               | Upload the clip to this URL instead of keeping a local file |
+| `headers`   | `object` | `{}`          | HTTP headers for the upload                                |
+| `formField` | `string` | `'file'`      | FormData field name for the upload                         |
+| `filename`  | `string` | `'recording'` | Upload file name (`.webm` is appended)                     |
+
+```lua
+-- Once, when the player is in game.
+exports.screencapture:startReplayBuffer(source, { bufferSeconds = 30 })
+
+-- Later, from your own kill handler. `killer` is the server id of the player to review.
+exports.screencapture:saveReplay(killer, { seconds = 5 }, function(result)
+    if result.status ~= 'success' then
+        print(('Replay failed: %s'):format(result.error))
+        return
+    end
+
+    print(('Replay saved to %s'):format(result.filePath))
+end)
+```
+
+Without `url` the file lives in `screencapture/tmp/` and the caller is responsible for it. With `url` it is uploaded and the temp file deleted, like `startVideoCaptureUpload`. A clip covers at least `seconds` and up to one second more, because it is cut on a keyframe. `result.duration` is how long the transfer took, not the clip length.
+
+`stopReplayBuffer(source)` stops the buffer and discards its footage. `isReplayBufferActive(source)` returns whether a buffer was started for the player. Buffers are cleared when the player drops. See the [docs](docs/src/content/docs/replay.md) for performance, memory and clip-length details.
+
+---
+
 ## Live streaming
 
 Live streaming publishes one player's game view to Cloudflare Realtime SFU and allows multiple admin-panel viewers to subscribe through `@screencapture/live`. Video does not travel through FiveM latent events. The player always sees a persistent streaming indicator.

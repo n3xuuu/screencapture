@@ -4,6 +4,8 @@ export type GameMediaSourceOptions = {
   maxWidth?: number;
   maxHeight?: number;
   frameRate?: number;
+  // Redraw the game view no faster than `frameRate` instead of on every animation frame.
+  throttleRender?: boolean;
 };
 
 export class GameMediaSource {
@@ -17,6 +19,10 @@ export class GameMediaSource {
     return this.#mediaStream !== null;
   }
 
+  get size(): { width: number; height: number } {
+    return { width: this.#canvas?.width ?? 0, height: this.#canvas?.height ?? 0 };
+  }
+
   async start(options: GameMediaSourceOptions = {}): Promise<MediaStream> {
     if (this.active) {
       throw new Error('Game media source is already active');
@@ -28,7 +34,7 @@ export class GameMediaSource {
     canvas.width = width;
     canvas.height = height;
 
-    const gameView = createGameView(canvas);
+    const gameView = createGameView(canvas, { maxFps: options.throttleRender ? options.frameRate : undefined });
     gameView.resize(width, height);
 
     this.#canvas = canvas;

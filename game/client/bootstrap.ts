@@ -136,13 +136,13 @@ function createImageCaptureMessage(options: CaptureRequest) {
   });
 }
 
-onNet('screencapture:captureStream', (token: string, options: object, captureId?: string) => {
+function sendStreamMessage(action: string, token: string, options: object, captureId?: string) {
   if (protocol === 'nui') {
     return SendNUIMessage({
       ...options,
       captureId,
       uploadToken: token,
-      action: 'capture-stream-start',
+      action,
       callbackUrl: `https://${GetCurrentResourceName()}/capture_stream_chunk`,
       finalizeCallbackUrl: `https://${GetCurrentResourceName()}/capture_stream_finalize`,
     });
@@ -152,9 +152,26 @@ onNet('screencapture:captureStream', (token: string, options: object, captureId?
     ...options,
     captureId,
     uploadToken: token,
-    action: 'capture-stream-start',
+    action,
     serverEndpoint: serverEndpoint,
   });
+}
+
+onNet('screencapture:captureStream', (token: string, options: object, captureId?: string) => {
+  sendStreamMessage('capture-stream-start', token, options, captureId);
+});
+
+onNet('screencapture:replay:start', (options: object) => {
+  SendNUIMessage({ ...options, action: 'replay-buffer-start' });
+});
+
+onNet('screencapture:replay:stop', () => {
+  SendNUIMessage({ action: 'replay-buffer-stop' });
+});
+
+// A saved replay is uploaded like a finished video capture, so it shares the stream token and chunk callbacks.
+onNet('screencapture:replay:save', (token: string, options: object, captureId?: string) => {
+  sendStreamMessage('replay-buffer-save', token, options, captureId);
 });
 
 onNet('screencapture:INTERNAL:stopCaptureStream', (captureId?: string) => {

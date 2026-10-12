@@ -23,6 +23,7 @@ export default defineConfig({
           items: [
             { label: 'Screenshots', slug: 'screenshots' },
             { label: 'Video', slug: 'video' },
+            { label: 'Instant replay', slug: 'replay' },
             { label: 'Live streaming', slug: 'live-streaming' },
           ],
         },

@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, unlink } from 'node:fs/promises';
 
 import { liveStreamStore, uploadStore } from './bootstrap';
 import {
@@ -9,8 +9,11 @@ import {
   LiveStreamCallback,
   LiveStreamOptions,
   LiveStreamViewerGrant,
+  ReplayBufferOptions,
+  ReplaySaveOptions,
   ScreenshotBasicCallbackFn,
   StreamRemoteConfig,
+  VideoCaptureResult,
   createScreenshotBasicUploadData,
   createRegularUploadData,
 } from './types';
@@ -18,6 +21,7 @@ import { endLiveStream, getLiveStreamClient, provisionLiveStream } from './live'
 import { exportHandler } from './utils';
 import { nanoid } from 'nanoid';
 import { emitNetToPlayer, validatePlayerSource } from './net';
+import { replaySources } from './replay';
 
 type PlayerSource = number | string;
 
@@ -49,6 +53,11 @@ function validateStreamRequest(source: PlayerSource, options: CaptureOptions, ex
 
   if (liveStreamStore.hasActiveStreamForSource(playerSource)) {
     console.error(`[screencapture] source ${playerSource} already has an active live stream`);
+    return;
+  }
+
+  if (replaySources.has(playerSource)) {
+    console.error(`[screencapture] source ${playerSource} has a replay buffer running, stop it with stopReplayBuffer first`);
     return;
   }
 
@@ -104,6 +113,10 @@ function startLiveStream(
     return fail(`source ${playerSource} already has an active video capture`);
   }
 
+  if (replaySources.has(playerSource)) {
+    return fail(`source ${playerSource} has a replay buffer running, stop it with stopReplayBuffer first`);
+  }
+
   try {
     getLiveStreamClient();
   } catch (error) {
@@ -147,6 +160,115 @@ global.exports('stopLiveStream', (streamId: string, callback?: (stopped: boolean
 });
 
 global.exports('isLiveStreamActive', (streamId: string) => Boolean(streamId && liveStreamStore.has(streamId)));
+
+function normalizeReplayBufferOptions(options: ReplayBufferOptions = {}): Required<ReplayBufferOptions> | undefined {
+  const normalized = {
+    bufferSeconds: options.bufferSeconds ?? 30,
+    maxWidth: options.maxWidth ?? 1280,
+    maxHeight: options.maxHeight ?? 720,
+    frameRate: options.frameRate ?? 20,
+  };
+
+  if (Object.values(normalized).some((value) => !Number.isInteger(value) || value < 1)) return;
+
+  return {
+    bufferSeconds: Math.min(normalized.bufferSeconds, 120),
+    maxWidth: Math.min(normalized.maxWidth, 1920),
+    maxHeight: Math.min(normalized.maxHeight, 1080),
+    frameRate: Math.min(normalized.frameRate, 30),
+    indicator: options.indicator !== false,
+  };
+}
+
+function startReplayBuffer(source: PlayerSource, options: ReplayBufferOptions = {}): boolean {
+  const playerSource = validatePlayerSource(source, 'startReplayBuffer');
+  if (!playerSource) return false;
+
+  const normalizedOptions = normalizeReplayBufferOptions(options ?? {});
+  if (!normalizedOptions) {
+    console.error('[screencapture] replay buffer options must be positive integers');
+    return false;
+  }
+
+  // Calling this again for a running buffer is allowed: the NUI ignores it.
+  const running = replaySources.has(playerSource);
+  if (!running && (uploadStore.hasActiveStreamForSource(playerSource) || liveStreamStore.hasActiveStreamForSource(playerSource))) {
+    console.error(`[screencapture] source ${playerSource} already has an active video capture or live stream`);
+    return false;
+  }
+
+  replaySources.add(playerSource);
+  return emitNetToPlayer('screencapture:replay:start', playerSource, normalizedOptions);
+}
+
+// A clip that has not finished arriving by then is dropped so the source is not blocked forever.
+// ponytail: failures inside the NUI (no footage yet, encoder died) surface only through this timeout. Add a NUI error event if the wait hurts.
+const REPLAY_SAVE_TIMEOUT = 120_000;
+
+function saveReplay(source: PlayerSource, options: ReplaySaveOptions = {}, callback: CallbackFn = () => {}): string {
+  const captureId = nanoid(24);
+  const realCallback = typeof callback === 'function' ? callback : () => {};
+  options = options ?? {};
+
+  const fail = (error: string, bytesReceived = 0): string => {
+    console.error(`[screencapture] cannot save replay: ${error}`);
+    const result: VideoCaptureResult = { captureId, source: playerSource ?? 0, status: 'error', bytesReceived, error };
+    realCallback(result);
+    return captureId;
+  };
+
+  const playerSource = validatePlayerSource(source, 'saveReplay');
+  if (!playerSource) return fail('source is required for saveReplay');
+
+  const seconds = options.seconds ?? 10;
+  if (!Number.isFinite(seconds) || seconds <= 0) return fail('seconds must be a positive number');
+
+  if (!replaySources.has(playerSource)) return fail(`source ${playerSource} has no replay buffer, call startReplayBuffer first`);
+
+  if (uploadStore.hasActiveStreamForSource(playerSource)) {
+    return fail(`source ${playerSource} already has a replay save in progress`);
+  }
+
+  const token = uploadStore.addStream({
+    captureId,
+    source: playerSource,
+    tempDir,
+    callback: realCallback,
+    isRemote: Boolean(options.url),
+    remoteUrl: options.url,
+    remoteConfig: { headers: options.headers, formField: options.formField, filename: options.filename },
+  });
+
+  emitNetToPlayer('screencapture:replay:save', playerSource, token, { seconds }, captureId);
+
+  setTimeout(() => {
+    let streamData;
+    try {
+      streamData = uploadStore.getStreamByCaptureId(captureId);
+    } catch {
+      return; // already finalized
+    }
+
+    uploadStore.removeStream(captureId);
+    unlink(streamData.tempFilePath).catch(() => {});
+    fail('timed out waiting for the player to send the replay, is the replay buffer running?', streamData.bytesReceived);
+  }, REPLAY_SAVE_TIMEOUT);
+
+  return captureId;
+}
+
+global.exports('startReplayBuffer', startReplayBuffer);
+global.exports('saveReplay', saveReplay);
+
+global.exports('stopReplayBuffer', (source: PlayerSource) => {
+  const playerSource = validatePlayerSource(source, 'stopReplayBuffer');
+  if (!playerSource) return;
+
+  replaySources.delete(playerSource);
+  emitNetToPlayer('screencapture:replay:stop', playerSource);
+});
+
+global.exports('isReplayBufferActive', (source: PlayerSource) => replaySources.has(Number(source)));
 
 function startVideoCapture(
   source: PlayerSource,

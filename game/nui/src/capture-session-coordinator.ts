@@ -1,4 +1,4 @@
-export type CaptureSessionKind = 'recording' | 'live';
+export type CaptureSessionKind = 'recording' | 'live' | 'replay';
 
 class CaptureSessionCoordinator {
   #activeSession: { kind: CaptureSessionKind; id: string } | null = null;
